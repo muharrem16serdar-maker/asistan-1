@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mark 3">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1f3a5f">
+<link rel="apple-touch-icon" id="icon" href="">
+<title>Mark 3 Asistan</title>
+<style>
+:root{
+  --bg:#eef2f6; --surface:#ffffff; --ink:#1b2a3a; --muted:#5d6e80;
+  --accent:#2f4bd8; --accent-ink:#ffffff; --line:#d5dde6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0e1620; --surface:#18232f; --ink:#e6edf4; --muted:#8fa1b3;
+        --accent:#6f87ff; --accent-ink:#0e1620; --line:#2a3846;}
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font:17px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  display:flex; flex-direction:column; height:100dvh;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+header{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px 16px; border-bottom:1px solid var(--line);
+}
+header h1{font-size:19px; margin:0; font-weight:650; letter-spacing:.2px}
+#ses{
+  font:inherit; font-size:15px; color:var(--ink); background:transparent;
+  border:1px solid var(--line); border-radius:999px; padding:6px 14px;
+}
+#ses[aria-pressed="false"]{color:var(--muted); text-decoration:line-through}
+#log{flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch}
+.m{max-width:85%; padding:10px 14px; white-space:pre-wrap; word-wrap:break-word}
+.bot{align-self:flex-start; background:var(--surface); border-radius:4px 18px 18px 18px; border-left:3px solid var(--accent)}
+.me{align-self:flex-end; background:var(--accent); color:var(--accent-ink); border-radius:18px 18px 4px 18px}
+.sys{align-self:center; color:var(--muted); font-size:14px; text-align:center}
+form{display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--line); background:var(--bg)}
+input{
+  flex:1; min-width:0; font:inherit; font-size:16px; color:var(--ink);
+  background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:11px 16px;
+}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+#gonder,.ac{
+  font:inherit; font-weight:600; color:var(--accent-ink); background:var(--accent);
+  border:0; border-radius:999px; padding:0 20px;
+}
+.ac{padding:11px 36px}
+#kilit{position:fixed;inset:0;z-index:10;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
+#kilit[hidden]{display:none}
+#kilit h1{font-size:26px;margin:0}
+#kilit input{flex:none;width:min(260px,100%);text-align:center;letter-spacing:.4em;font-size:22px}
+#kilit p{margin:0;color:var(--muted);min-height:1.4em}
+</style>
+</head>
+<body>
+<div id="kilit">
+  <h1>Mark 3</h1>
+  <input id="pin" type="password" inputmode="numeric" enterkeyhint="go" autocomplete="off" placeholder="PIN" aria-label="PIN">
+  <button id="kb" type="button" class="ac">Aç</button>
+  <p id="kmsg" role="alert"></p>
+</div>
+<header>
+  <h1>Mark 3</h1>
+  <button id="ses" type="button" aria-pressed="true">Ses açık</button>
+</header>
+<main id="log" aria-live="polite"></main>
+<form id="f" autocomplete="off">
+  <input id="q" type="text" enterkeyhint="send" placeholder="Örn: hava durumu antalya" aria-label="Mesaj" autocapitalize="none" autocorrect="off">
+  <button id="gonder" type="submit">Gönder</button>
+</form>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const log = $("log"), input = $("q"), sesBtn = $("ses");
+let sesAcik = true;
+let bekleyen = null; // {tip:"sehir"} veya {tip:"ogren", soru:"..."}
+
+// --- Ana ekran simgesi (iOS için PNG gerekir) ---
+try {
+  const c = document.createElement("canvas"); c.width = c.height = 180;
+  const g = c.getContext("2d");
+  g.fillStyle = "#1f3a5f"; g.fillRect(0, 0, 180, 180);
+  g.fillStyle = "#ffffff"; g.font = "bold 92px -apple-system, sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("M3", 90, 94);
+  $("icon").href = c.toDataURL("image/png");
+} catch (e) {}
+
+// --- Hafıza (bu telefondaki tarayıcıda saklanır) ---
+const ANAHTAR = "mark3_hafiza";
+function hafizaYukle() {
+  try { return JSON.parse(localStorage.getItem(ANAHTAR)) || {}; } catch (e) { return {}; }
+}
+function hafizaKaydet(h) {
+  try { localStorage.setItem(ANAHTAR, JSON.stringify(h)); } catch (e) {}
+}
+const hafiza = hafizaYukle();
+
+// --- Mesaj ve ses ---
+function ekle(metin, sinif) {
+  const d = document.createElement("div");
+  d.className = "m " + sinif; d.textContent = metin;
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+function konus(metin) {
+  ekle(metin, "bot");
+  if (!sesAcik || !("speechSynthesis" in window)) return;
+  try {
+    const u = new SpeechSynthesisUtterance(metin);
+    u.lang = "tr-TR";
+    const v = speechSynthesis.getVoices().find(x => x.lang && x.lang.toLowerCase().startsWith("tr"));
+    if (v) u.voice = v;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+function sesiAc() { // iOS, sesi ancak dokunuşla başlayan bir olaydan sonra çalar
+  if (!("speechSynthesis" in window)) return;
+  try { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch (e) {}
+}
+sesBtn.addEventListener("click", () => {
+  sesAcik = !sesAcik;
+  sesBtn.setAttribute("aria-pressed", String(sesAcik));
+  sesBtn.textContent = sesAcik ? "Ses açık" : "Ses kapalı";
+  if (!sesAcik && "speechSynthesis" in window) speechSynthesis.cancel();
+});
+
+// --- İnternet isteği ---
+async function getJson(url) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+// --- Hava durumu ---
+async function havaDurumu(sehir) {
+  try {
+    const g = await getJson("https://geocoding-api.open-meteo.com/v1/search?name=" +
+      encodeURIComponent(sehir) + "&count=1&language=tr&format=json");
+    if (!g.results || !g.results.length) return "Şehri bulamadım patron.";
+    const { latitude, longitude } = g.results[0];
+    const w = await getJson("https://api.open-meteo.com/v1/forecast?latitude=" + latitude +
+      "&longitude=" + longitude + "&current_weather=true");
+    return sehir + " şu an " + w.current_weather.temperature + " derece patron.";
+  } catch (e) {
+    return "Hava durumu servisine ulaşılamadı patron.";
+  }
+}
+
+// --- Matematik (eval yok, kendi ayrıştırıcımız) ---
+function hesapla(ifade) {
+  const tok = ifade.match(/\d+(?:\.\d+)?|\*\*|[-+*\/^()]/g);
+  if (!tok || tok.join("") !== ifade.replace(/\s+/g, "")) throw new Error("anlasilmadi");
+  let i = 0;
+  const bak = () => tok[i];
+  function toplam() {
+    let a = carpim();
+    while (bak() === "+" || bak() === "-") { const o = tok[i++]; const b = carpim(); a = o === "+" ? a + b : a - b; }
+    return a;
+  }
+  function carpim() {
+    let a = birli();
+    while (bak() === "*" || bak() === "/") {
+      const o = tok[i++]; const b = birli();
+      if (o === "/" && b === 0) throw new Error("sifir");
+      a = o === "*" ? a * b : a / b;
+    }
+    return a;
+  }
+  function birli() {
+    if (bak() === "-") { i++; return -birli(); }
+    if (bak() === "+") { i++; return birli(); }
+    const a = atom();
+    if (bak() === "**" || bak() === "^") {
+      i++; const b = birli();
+      if (Math.abs(b) > 100 || Math.abs(a) > 1e6) throw new Error("buyuk");
+      return Math.pow(a, b);
+    }
+    return a;
+  }
+  function atom() {
+    const t = tok[i++];
+    if (t === "(") { const a = toplam(); if (tok[i++] !== ")") throw new Error("parantez"); return a; }
+    if (t !== undefined && /^\d/.test(t)) return parseFloat(t);
+    throw new Error("anlasilmadi");
+  }
+  const sonuc = toplam();
+  if (i !== tok.length) throw new Error("anlasilmadi");
+  return sonuc;
+}
+function matematik(soru) {
+  let s = soru.replace(/hesapla|kaç eder|kaç|\?/g, "").replace(/,/g, ".");
+  s = s.replace(/çarpı|kere/g, "*").replace(/bölü/g, "/").replace(/artı/g, "+")
+       .replace(/eksi/g, "-").replace(/üzeri/g, "^").replace(/kare|²/g, "**2")
+       .replace(/(?<=\d)\s*x\s*(?=\d)/g, "*").trim();
+  try {
+    const r = hesapla(s);
+    if (!isFinite(r)) throw new Error("buyuk");
+    return "Sonuç: " + r.toLocaleString("tr-TR", { maximumFractionDigits: 4 }) + " patron.";
+  } catch (e) {
+    if (e.message === "sifir") return "Sıfıra bölemem patron.";
+    return "Bu işlemi anlayamadım patron. Örnek: 25 çarpı 4";
+  }
+}
+
+// --- Wikipedia ---
+const WIKI = "https://tr.wikipedia.org/w/api.php?format=json&origin=*&";
+async function rastgeleKonu() {
+  const r = await getJson(WIKI + "action=query&list=random&rnlimit=1&rnnamespace=0");
+  return r.query.random[0].title;
+}
+async function wikiOzet(konu) {
+  const r = await getJson(WIKI + "action=query&generator=search&gsrlimit=1&gsrsearch=" +
+    encodeURIComponent(konu) + "&prop=extracts&exintro=1&explaintext=1&redirects=1");
+  if (!r.query || !r.query.pages) return null;
+  const sayfa = Object.values(r.query.pages)[0];
+  let o = (sayfa.extract || "").replace(/\s+/g, " ").trim();
+  if (!o) return null;
+  if (o.length > 250) { o = o.slice(0, 250); o = o.slice(0, o.lastIndexOf(" ")) + "…"; }
+  return o;
+}
+
+// --- Ana akış ---
+async function isle(ham) {
+  const soru = ham.trim().toLocaleLowerCase("tr");
+  if (!soru) return;
+  if (bekleyen && bekleyen.tip === "pin") { // PIN ekrana yazılmaz
+    bekleyen = null; input.type = "text";
+    const yeni = ham.trim();
+    if (!/^\d{4,12}$/.test(yeni)) return konus("PIN 4 ile 12 rakamdan oluşmalı. Tekrar denemek için pin değiştir yaz.");
+    const o = await ozet(yeni);
+    try { localStorage.setItem("mark3_pin", o); } catch (e) {}
+    return konus("PIN değişti patron.");
+  }
+  ekle(ham.trim(), "me");
+  if (soru === "pin değiştir") {
+    bekleyen = { tip: "pin" }; input.type = "password";
+    return konus("Yeni PIN'i yaz patron.");
+  }
+
+  if (bekleyen && bekleyen.tip === "sehir") {
+    bekleyen = null; return konus(await havaDurumu(ham.trim()));
+  }
+  if (bekleyen && bekleyen.tip === "ogren") {
+    const s = bekleyen.soru; bekleyen = null;
+    if (ham.trim()) { hafiza[s] = ham.trim(); hafizaKaydet(hafiza); konus("Öğrendim patron."); }
+    return;
+  }
+  if (soru === "sessiz" || soru === "sesli") {
+    if ((soru === "sessiz") === sesAcik) sesBtn.click();
+    return ekle(sesAcik ? "Ses açıldı." : "Ses kapatıldı.", "sys");
+  }
+  if (soru.includes("hava durumu")) {
+    const sehir = soru.replace("hava durumu", "").trim();
+    if (!sehir) { bekleyen = { tip: "sehir" }; return konus("Hangi şehir patron?"); }
+    return konus(await havaDurumu(sehir));
+  }
+  if (soru.includes("hesapla") || (soru.includes("kaç") && /\d/.test(soru))) {
+    return konus(matematik(soru));
+  }
+  if (soru.includes("araştır")) {
+    let konu = soru.replace("araştır", "").trim();
+    try {
+      if (!konu || konu.includes("rastgele") || konu.includes("random")) konu = await rastgeleKonu();
+      konus(konu + " araştırılıyor.");
+      const ozet = await wikiOzet(konu);
+      return konus(ozet || "Bu konuda bilgi bulunamadı patron.");
+    } catch (e) {
+      return konus("Wikipedia servisine ulaşılamadı patron.");
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(hafiza, soru)) return konus(hafiza[soru]);
+  bekleyen = { tip: "ogren", soru };
+  konus("Bunu bilmiyorum patron. Cevabı nedir?");
+}
+
+$("f").addEventListener("submit", e => {
+  e.preventDefault();
+  const v = input.value;
+  input.value = "";
+  sesiAc();
+  isle(v);
+  input.focus();
+});
+
+// --- PIN kilidi (sadece meraklıları durdurur; gerçek güvenlik değildir) ---
+const PIN_OZET = "476d836897202ec4fd5ed3f1d258f0ad2c5015dc93546b3a8adc3074cad0c4e6";
+async function ozet(p) {
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("mark3:" + p));
+  return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, "0")).join("");
+}
+function yerelOzet() { try { return localStorage.getItem("mark3_pin"); } catch (e) { return null; } }
+let hata = 0, kilitBitis = 0;
+async function kilitAc() {
+  const msg = $("kmsg");
+  if (Date.now() < kilitBitis) { msg.textContent = "Biraz bekle: " + Math.ceil((kilitBitis - Date.now()) / 1000) + " sn"; return; }
+  if (!window.crypto || !crypto.subtle) { msg.textContent = "Bu tarayıcı PIN kontrolünü desteklemiyor (https gerekir)."; return; }
+  const o = await ozet($("pin").value.trim());
+  $("pin").value = "";
+  if (o === (yerelOzet() || PIN_OZET)) { $("kilit").hidden = true; msg.textContent = ""; input.focus(); return; }
+  hata++;
+  msg.textContent = "PIN yanlış.";
+  if (hata >= 5) { kilitBitis = Date.now() + 30000; hata = 0; msg.textContent = "5 yanlış deneme. 30 saniye bekle."; }
+}
+$("kb").addEventListener("click", kilitAc);
+$("pin").addEventListener("keydown", e => { if (e.key === "Enter") kilitAc(); });
+
+ekle("Evinize hoş geldiniz patron. Sistemler aktif.", "bot");
+ekle("Ses, ilk mesajını gönderince açılır.", "sys");
+</script>
+</body>
+</html>
