@@ -33,7 +33,7 @@ header{
   padding:12px 16px; border-bottom:1px solid var(--line);
 }
 header h1{font-size:19px; margin:0; font-weight:650; letter-spacing:.2px}
-#ses{
+#ses,.pill{
   font:inherit; font-size:15px; color:var(--ink); background:transparent;
   border:1px solid var(--line); border-radius:999px; padding:6px 14px;
 }
@@ -59,6 +59,18 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--accent); outlin
 #kilit h1{font-size:26px;margin:0}
 #kilit input{flex:none;width:min(260px,100%);text-align:center;letter-spacing:.4em;font-size:22px}
 #kilit p{margin:0;color:var(--muted);min-height:1.4em}
+.hb{display:flex; gap:8px}
+#hm{position:fixed; inset:0; z-index:5; background:var(--bg); display:flex; flex-direction:column;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px)}
+#hm[hidden]{display:none}
+.hmbas{display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line)}
+#ekr{padding:16px; text-align:right; min-height:110px; display:flex; flex-direction:column; justify-content:flex-end; gap:4px}
+#ifa{font-size:30px; word-break:break-all; min-height:1.4em}
+#son{font-size:20px; color:var(--muted); min-height:1.4em}
+#tuslar{flex:1; display:grid; grid-template-columns:repeat(4,1fr); grid-auto-rows:1fr; gap:8px; padding:12px}
+#tuslar button{font:inherit; font-size:24px; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:14px; touch-action:manipulation}
+#tuslar button.op{color:var(--accent)}
+#tuslar button.es{grid-column:1/-1; background:var(--accent); color:var(--accent-ink); border:0}
 </style>
 </head>
 <body>
@@ -70,8 +82,16 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--accent); outlin
 </div>
 <header>
   <h1>Mark 3</h1>
-  <button id="ses" type="button" aria-pressed="true">Ses açık</button>
+  <div class="hb">
+    <button id="hmb" type="button" class="pill">Hesap</button>
+    <button id="ses" type="button" aria-pressed="true">Ses açık</button>
+  </div>
 </header>
+<div id="hm" hidden>
+  <div class="hmbas"><strong>Hesap makinesi</strong><button id="hmk" type="button" class="pill">Kapat</button></div>
+  <div id="ekr"><div id="ifa">0</div><div id="son"></div></div>
+  <div id="tuslar"></div>
+</div>
 <main id="log" aria-live="polite"></main>
 <form id="f" autocomplete="off">
   <input id="q" type="text" enterkeyhint="send" placeholder="Örn: hava durumu antalya" aria-label="Mesaj" autocapitalize="none" autocorrect="off">
@@ -232,6 +252,139 @@ async function wikiOzet(konu) {
   return o;
 }
 
+// --- Yardımcılar ---
+function depoOku(k) { try { return JSON.parse(localStorage.getItem(k)) || []; } catch (e) { return []; } }
+function depoYaz(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function saatStr(ms) { return new Date(ms).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }); }
+
+// --- Notlar ---
+const NOTLAR = "mark3_notlar";
+let notlar = depoOku(NOTLAR);
+function notKomutu(soru, ham) {
+  if (/^(notlarımı|notları|tüm notları) sil/.test(soru)) {
+    notlar = []; depoYaz(NOTLAR, notlar); return "Tüm notlar silindi patron.";
+  }
+  const m = soru.match(/^not sil\s+(\d+)/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n < 1 || n > notlar.length) return "Böyle bir not yok patron.";
+    const s = notlar.splice(n - 1, 1)[0]; depoYaz(NOTLAR, notlar);
+    return "Silindi: " + s;
+  }
+  if (soru.startsWith("notlarım") || soru.startsWith("notları")) {
+    if (!notlar.length) return "Hiç notun yok patron.";
+    return notlar.map((n, i) => (i + 1) + ". " + n).join("\n");
+  }
+  if (/^not (al|ekle)/.test(soru)) {
+    const metin = ham.trim().replace(/^not\s+(al|ekle)\s*:?\s*/i, "");
+    if (!metin) return "Ne yazayım patron? Örnek: not al süt al";
+    if (notlar.length >= 200) return "Not defteri dolu patron, bazılarını silmelisin.";
+    notlar.push(metin); depoYaz(NOTLAR, notlar);
+    return "Not alındı patron.";
+  }
+  return null;
+}
+
+// --- Hatırlatıcı (uygulama açıkken çalışır) ---
+const HAT = "mark3_hatirlat";
+let hatirlar = depoOku(HAT);
+const BIRIM = { saniye: 1e3, sn: 1e3, dakika: 6e4, dk: 6e4, saat: 36e5 };
+function hatirlatKomutu(soru) {
+  if (soru.includes("hatırlatıcı")) {
+    if (soru.includes("sil")) { hatirlar = []; depoYaz(HAT, hatirlar); return "Hatırlatıcılar silindi patron."; }
+    if (!hatirlar.length) return "Bekleyen hatırlatıcı yok patron.";
+    return hatirlar.map(h => saatStr(h.zaman) + " - " + h.metin).join("\n");
+  }
+  const m = soru.match(/(\d+)\s*(saniye|sn|dakika|dk|saat)/);
+  if (!m) return "Ne kadar süre sonra patron? Örnek: 10 dakika sonra su içmemi hatırlat";
+  const ms = parseInt(m[1], 10) * BIRIM[m[2]];
+  if (ms > 7 * 864e5) return "En fazla 7 gün sonrasına kurabilirim patron.";
+  const metin = soru.replace(m[0], " ").split(/\s+/)
+    .filter(w => w && !["sonra", "bana", "beni"].includes(w) && !w.startsWith("hatırlat")).join(" ") || "zamanı geldi";
+  hatirlar.push({ zaman: Date.now() + ms, metin }); depoYaz(HAT, hatirlar);
+  return "Tamam patron, " + m[0] + " sonra hatırlatacağım. Uygulama açık kalmalı.";
+}
+function hatirlatKontrol() {
+  if (!$("kilit").hidden || !hatirlar.length) return;
+  const simdi = Date.now();
+  const biten = hatirlar.filter(h => h.zaman <= simdi);
+  if (!biten.length) return;
+  hatirlar = hatirlar.filter(h => h.zaman > simdi); depoYaz(HAT, hatirlar);
+  biten.forEach(h => konus("Hatırlatma: " + h.metin + (simdi - h.zaman > 60000 ? " (saat " + saatStr(h.zaman) + " için kurulmuştu)" : "")));
+}
+setInterval(hatirlatKontrol, 1000);
+document.addEventListener("visibilitychange", hatirlatKontrol);
+
+// --- Döviz ---
+const PARA = { dolar: "USD", euro: "EUR", sterlin: "GBP", frank: "CHF" };
+async function kurlar() {
+  for (const url of ["https://open.er-api.com/v6/latest/TRY", "https://api.frankfurter.dev/v1/latest?base=TRY"]) {
+    try { const r = await getJson(url); if (r.rates && r.rates.USD) return r.rates; } catch (e) {}
+  }
+  return null;
+}
+async function dovizKomutu(soru) {
+  const k = Object.keys(PARA).find(w => soru.includes(w));
+  if (!k && !soru.includes("döviz")) return null;
+  if (!/kaç|kur|ne kadar|lira|\btl\b|eder|döviz/.test(soru)) return null;
+  const a = soru.match(/(\d+(?:[.,]\d+)?)/);
+  const n = a ? parseFloat(a[1].replace(",", ".")) : 1;
+  const t = await kurlar();
+  if (!t) return "Döviz servisine ulaşılamadı patron.";
+  const tl = x => x.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
+  if (k) return n + " " + k + " şu an yaklaşık " + tl(n / t[PARA[k]]) + " lira patron.";
+  return ["dolar", "euro", "sterlin"].map(w => "1 " + w + " = " + tl(1 / t[PARA[w]]) + " lira").join("\n");
+}
+
+// --- Hesap makinesi paneli ---
+let ifade = "", sonuc = "", yeni = false;
+function hmGoster() { $("ifa").textContent = ifade || "0"; $("son").textContent = sonuc; }
+function hmAc() { $("hm").hidden = false; }
+function hmBas(t) {
+  const sayi = /^[0-9.(]$/.test(t);
+  if (t === "C") { ifade = ""; sonuc = ""; yeni = false; }
+  else if (t === "⌫") { ifade = ifade.slice(0, -1); }
+  else if (t === "=") {
+    if (!ifade) return;
+    try {
+      const r = hesapla(ifade.replace(/×/g, "*").replace(/÷/g, "/").replace(/−/g, "-"));
+      if (!isFinite(r)) throw new Error("x");
+      sonuc = r.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 8 });
+      yeni = true;
+    } catch (e) { sonuc = "Hata"; }
+  } else {
+    if (yeni) { ifade = sayi ? "" : sonuc; yeni = false; }
+    ifade += t; sonuc = "";
+  }
+  hmGoster();
+}
+(function () {
+  const tuslar = ["C", "⌫", "(", ")", "7", "8", "9", "÷", "4", "5", "6", "×", "1", "2", "3", "−", "0", ".", "^", "+", "="];
+  tuslar.forEach(t => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = t;
+    if (t === "=") b.className = "es";
+    else if ("C⌫()÷×−+^".includes(t)) b.className = "op";
+    if (t === "⌫") b.setAttribute("aria-label", "Sil");
+    b.addEventListener("click", () => hmBas(t));
+    $("tuslar").appendChild(b);
+  });
+  $("hmb").addEventListener("click", hmAc);
+  $("hmk").addEventListener("click", () => { $("hm").hidden = true; });
+})();
+
+const YARDIM = [
+  "Komutlar:",
+  "hava durumu <şehir>",
+  "hesapla 25 çarpı 4  ·  hesap makinesi",
+  "araştır <konu>  ·  araştır rastgele",
+  "saat kaç  ·  bugün tarih ne",
+  "dolar kaç  ·  100 euro kaç lira  ·  döviz",
+  "not al <metin>  ·  notlarım  ·  not sil 2  ·  notları sil",
+  "10 dakika sonra su içmemi hatırlat  ·  hatırlatıcılarım",
+  "sessiz  ·  sesli  ·  pin değiştir"
+].join("\n");
+
 // --- Ana akış ---
 async function isle(ham) {
   const soru = ham.trim().toLocaleLowerCase("tr");
@@ -266,6 +419,17 @@ async function isle(ham) {
     const sehir = soru.replace("hava durumu", "").trim();
     if (!sehir) { bekleyen = { tip: "sehir" }; return konus("Hangi şehir patron?"); }
     return konus(await havaDurumu(sehir));
+  }
+  if (soru === "yardım" || soru === "komutlar") return ekle(YARDIM, "bot");
+  if (soru.includes("hesap makinesi")) { hmAc(); return konus("Hesap makinesi açıldı patron."); }
+  const nt = notKomutu(soru, ham);
+  if (nt) return konus(nt);
+  if (soru.includes("hatırlat")) return konus(hatirlatKomutu(soru));
+  const dv = await dovizKomutu(soru);
+  if (dv) return konus(dv);
+  if (soru.includes("saat") && !/\d/.test(soru)) return konus("Saat " + saatStr(Date.now()) + " patron.");
+  if (/tarih|günlerden|hangi gün/.test(soru)) {
+    return konus(new Date().toLocaleDateString("tr-TR", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) + " patron.");
   }
   if (soru.includes("hesapla") || (soru.includes("kaç") && /\d/.test(soru))) {
     return konus(matematik(soru));
@@ -318,7 +482,7 @@ $("kb").addEventListener("click", kilitAc);
 $("pin").addEventListener("keydown", e => { if (e.key === "Enter") kilitAc(); });
 
 ekle("Evinize hoş geldiniz patron. Sistemler aktif.", "bot");
-ekle("Ses, ilk mesajını gönderince açılır.", "sys");
+ekle("Ses, ilk mesajını gönderince açılır. Komutlar için yardım yaz.", "sys");
 </script>
 </body>
 </html>
