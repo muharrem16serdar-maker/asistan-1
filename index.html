@@ -143,6 +143,7 @@ function konus(metin) {
   } catch (e) {}
 }
 function sesiAc() { // iOS, sesi ancak dokunuşla başlayan bir olaydan sonra çalar
+  okumaDurdur();
   if (!("speechSynthesis" in window)) return;
   try { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch (e) {}
 }
@@ -248,6 +249,7 @@ async function wikiOzet(konu) {
   const sayfa = Object.values(r.query.pages)[0];
   let o = (sayfa.extract || "").replace(/\s+/g, " ").trim();
   if (!o) return null;
+  sonMakale = { baslik: sayfa.title, parcalar: null, i: 0 };
   if (o.length > 250) { o = o.slice(0, 250); o = o.slice(0, o.lastIndexOf(" ")) + "…"; }
   return o;
 }
@@ -377,13 +379,72 @@ const YARDIM = [
   "Komutlar:",
   "hava durumu <şehir>",
   "hesapla 25 çarpı 4  ·  hesap makinesi",
-  "araştır <konu>  ·  araştır rastgele",
+  "araştır <konu>  ·  araştır rastgele  ·  tamamını oku  ·  devamını oku  ·  dur",
   "saat kaç  ·  bugün tarih ne",
   "dolar kaç  ·  100 euro kaç lira  ·  döviz",
   "not al <metin>  ·  notlarım  ·  not sil 2  ·  notları sil",
   "10 dakika sonra su içmemi hatırlat  ·  hatırlatıcılarım",
   "sessiz  ·  sesli  ·  pin değiştir"
 ].join("\n");
+
+// --- Wikipedia makalesini tam okuma ---
+let sonMakale = null, okuyor = false, okuNo = 0, aktifUtt = null;
+function okumaDurdur() {
+  okuyor = false; okuNo++;
+  try { if ("speechSynthesis" in window) speechSynthesis.cancel(); } catch (e) {}
+}
+async function wikiTam(baslik) {
+  const r = await getJson(WIKI + "action=query&prop=extracts&explaintext=1&redirects=1&titles=" + encodeURIComponent(baslik));
+  const sayfa = Object.values(r.query.pages)[0];
+  return sayfa.extract || "";
+}
+function makaleTemizle(t) {
+  const k = t.search(/\n==\s*(Kaynakça|Dış bağlantılar|Notlar|Dipnotlar|Ayrıca bakınız|Konuyla ilgili yayınlar|Kaynaklar|Bibliyografya)\s*==/i);
+  if (k > 0) t = t.slice(0, k);
+  t = t.replace(/^=+\s*(.+?)\s*=+\s*$/gm, "$1.");
+  return t.replace(/\s+/g, " ").trim();
+}
+function parcala(m, max) {
+  const out = []; let cur = "";
+  m.replace(/([.!?…])\s+/g, "$1\n").split("\n").forEach(c => {
+    if (cur && (cur + " " + c).length > max) { out.push(cur); cur = c; }
+    else cur = cur ? cur + " " + c : c;
+  });
+  if (cur) out.push(cur);
+  return out;
+}
+async function makaleOku(bastan) {
+  if (!sonMakale) return konus("Önce bir konu araştırmalısın patron. Örnek: araştır ay");
+  if (!sonMakale.parcalar) {
+    ekle("Makale getiriliyor...", "sys");
+    try { sonMakale.parcalar = parcala(makaleTemizle(await wikiTam(sonMakale.baslik)), 600); }
+    catch (e) { return konus("Wikipedia servisine ulaşılamadı patron."); }
+    if (!sonMakale.parcalar.length) return konus("Makale metni boş geldi patron.");
+  }
+  const m = sonMakale;
+  if (bastan) m.i = 0;
+  if (m.i >= m.parcalar.length) return konus("Makalenin sonuna geldik patron. Baştan okumak için: tamamını oku");
+  if (!sesAcik || !("speechSynthesis" in window)) { // ses kapalıysa her seferde bir bölüm
+    ekle(m.parcalar[m.i++], "bot");
+    return ekle("(" + m.i + "/" + m.parcalar.length + ") Sonraki bölüm için: devamını oku", "sys");
+  }
+  const no = ++okuNo; okuyor = true;
+  const sonraki = () => {
+    if (no !== okuNo || !okuyor) return;
+    if (m.i >= m.parcalar.length) { okuyor = false; return ekle("Okuma bitti.", "sys"); }
+    const t = m.parcalar[m.i++];
+    ekle(t, "bot");
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang = "tr-TR";
+    const v = speechSynthesis.getVoices().find(x => x.lang && x.lang.toLowerCase().startsWith("tr"));
+    if (v) u.voice = v;
+    u.onend = sonraki;
+    u.onerror = () => { if (no === okuNo) okuyor = false; };
+    aktifUtt = u;
+    speechSynthesis.speak(u);
+  };
+  sonraki();
+}
 
 // --- Ana akış ---
 async function isle(ham) {
@@ -421,6 +482,12 @@ async function isle(ham) {
     return konus(await havaDurumu(sehir));
   }
   if (soru === "yardım" || soru === "komutlar") return ekle(YARDIM, "bot");
+  if (["dur", "sus", "yeter", "durdur"].includes(soru)) {
+    okumaDurdur();
+    return ekle("Durdum patron. Kaldığın yerden devam için: devamını oku", "sys");
+  }
+  if (/^(tamamını|makaleyi|hepsini|baştan) oku/.test(soru)) return makaleOku(true);
+  if (/^(devamını oku|devam oku|devam)$/.test(soru)) return makaleOku(false);
   if (soru.includes("hesap makinesi")) { hmAc(); return konus("Hesap makinesi açıldı patron."); }
   const nt = notKomutu(soru, ham);
   if (nt) return konus(nt);
@@ -440,7 +507,9 @@ async function isle(ham) {
       if (!konu || konu.includes("rastgele") || konu.includes("random")) konu = await rastgeleKonu();
       konus(konu + " araştırılıyor.");
       const ozet = await wikiOzet(konu);
-      return konus(ozet || "Bu konuda bilgi bulunamadı patron.");
+      konus(ozet || "Bu konuda bilgi bulunamadı patron.");
+      if (ozet) ekle("Tamamını dinlemek için: tamamını oku. Durdurmak için: dur. Kaldığın yerden: devamını oku.", "sys");
+      return;
     } catch (e) {
       return konus("Wikipedia servisine ulaşılamadı patron.");
     }
