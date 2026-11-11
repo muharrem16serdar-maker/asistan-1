@@ -71,6 +71,9 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--accent); outlin
 #tuslar button{font:inherit; font-size:24px; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:14px; touch-action:manipulation}
 #tuslar button.op{color:var(--accent)}
 #tuslar button.es{grid-column:1/-1; background:var(--accent); color:var(--accent-ink); border:0}
+.ayet .ar{font-size:26px; line-height:1.9; direction:rtl; text-align:right; margin:0 0 8px}
+.ayet .tr{margin:0}
+.ayet .ref{color:var(--muted); font-size:14px; margin-top:8px}
 </style>
 </head>
 <body>
@@ -380,7 +383,7 @@ const YARDIM = [
   "hava durumu <şehir>",
   "hesapla 25 çarpı 4  ·  hesap makinesi",
   "araştır <konu>  ·  araştır rastgele  ·  tamamını oku  ·  devamını oku  ·  dur",
-  "saat kaç  ·  bugün tarih ne",
+  "ayet söyle  ·  ayet 2:255  ·  saat kaç  ·  bugün tarih ne",
   "dolar kaç  ·  100 euro kaç lira  ·  döviz",
   "not al <metin>  ·  notlarım  ·  not sil 2  ·  notları sil",
   "10 dakika sonra su içmemi hatırlat  ·  hatırlatıcılarım",
@@ -446,6 +449,56 @@ async function makaleOku(bastan) {
   sonraki();
 }
 
+// --- Kur'an-ı Kerim: rastgele ayet (alquran.cloud, metin her seferinde internetten gelir) ---
+const MEAL = { "tr.diyanet": "Diyanet İşleri Başkanlığı", "tr.yazir": "Elmalılı Hamdi Yazır" };
+async function ayetGetir(ref) {
+  for (const meal of ["tr.diyanet", "tr.yazir"]) {
+    try {
+      const r = await getJson("https://api.alquran.cloud/v1/ayah/" + ref + "/editions/quran-uthmani," + meal);
+      if (r.data && r.data.length >= 2) return r.data;
+    } catch (e) {}
+  }
+  return null;
+}
+function ayetIstegi(soru) {
+  if (!soru.includes("ayet") && !soru.includes("kürsi")) return null;
+  if (soru.includes("kürsi")) return "2:255";
+  const m = soru.match(/ayet\s*(\d{1,3})\s*[:\s]\s*(\d{1,3})/);
+  if (m) return m[1] + ":" + m[2];
+  if (/^(rastgele |bir )?ayet( söyle| oku| ver| getir)?$/.test(soru) ||
+      (/söyle|oku|ver|getir|rastgele/.test(soru) && !/\d/.test(soru))) return "random";
+  return null;
+}
+function ayetEkle(ar, tr, ref) {
+  const d = document.createElement("div");
+  d.className = "m bot ayet";
+  const a = document.createElement("p"); a.className = "ar"; a.lang = "ar"; a.dir = "rtl"; a.textContent = ar;
+  const t = document.createElement("p"); t.className = "tr"; t.textContent = tr;
+  const r = document.createElement("div"); r.className = "ref"; r.textContent = ref;
+  d.append(a, t, r);
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+function seslendir(metin) { // sadece Türkçe meal okunur
+  if (!sesAcik || !("speechSynthesis" in window)) return;
+  try {
+    const u = new SpeechSynthesisUtterance(metin);
+    u.lang = "tr-TR";
+    const v = speechSynthesis.getVoices().find(x => x.lang && x.lang.toLowerCase().startsWith("tr"));
+    if (v) u.voice = v;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+async function ayetSoyle(istek) {
+  const ref = istek === "random" ? String(Math.floor(Math.random() * 6236) + 1) : istek;
+  const d = await ayetGetir(ref);
+  if (!d) return konus(istek === "random" ? "Ayet servisine ulaşılamadı patron." : "Bu ayeti bulamadım ya da servise ulaşılamadı patron.");
+  const ar = d.find(x => x.edition.identifier === "quran-uthmani") || d[0];
+  const tr = d.find(x => x !== ar) || d[1];
+  ayetEkle(ar.text, tr.text, "Kur'an " + ar.surah.number + ":" + ar.numberInSurah + " · " + ar.surah.englishName +
+    " · Meal: " + (MEAL[tr.edition.identifier] || tr.edition.name));
+  seslendir(tr.text + " Sure " + ar.surah.number + ", ayet " + ar.numberInSurah + ".");
+}
+
 // --- Ana akış ---
 async function isle(ham) {
   const soru = ham.trim().toLocaleLowerCase("tr");
@@ -488,6 +541,8 @@ async function isle(ham) {
   }
   if (/^(tamamını|makaleyi|hepsini|baştan) oku/.test(soru)) return makaleOku(true);
   if (/^(devamını oku|devam oku|devam)$/.test(soru)) return makaleOku(false);
+  const ay = ayetIstegi(soru);
+  if (ay) return ayetSoyle(ay);
   if (soru.includes("hesap makinesi")) { hmAc(); return konus("Hesap makinesi açıldı patron."); }
   const nt = notKomutu(soru, ham);
   if (nt) return konus(nt);
